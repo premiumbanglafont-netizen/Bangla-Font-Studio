@@ -1,0 +1,140 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Bangla Font Studio — Font Metadata Editor</title>
+<script src="https://cdn.jsdelivr.net/npm/opentype.js@1.3.4/dist/opentype.min.js"></script>
+<link rel="stylesheet" href="styles.css">
+
+</head>
+<body>
+<div class="app">
+<header class="topbar">
+  <div class="brand"><div class="logo"><span>বাংলা</span></div><span>Bangla Font Studio</span></div>
+  <div class="top-actions">
+    <button class="btn ghost small" id="resetBtn" type="button" aria-label="Reset font inspector">Reset</button>
+    <button class="btn primary" id="saveBtn" type="button" aria-label="Save edited font">Save Edited Font</button>
+  </div>
+</header>
+
+<div class="mobile-nav" id="mobileNav"></div>
+
+<div class="shell">
+<aside class="sidebar">
+  <div class="nav-title">Inspector</div>
+  <nav class="nav" id="sideNav" aria-label="Font Studio sections">
+    <button data-view="overview" class="active">Overview</button>
+    <button data-view="preview">Type & Preview</button>
+    <button data-view="glyphs">Glyph Explorer</button>
+    <button data-view="metadata">Metadata Editor</button>
+    <button data-view="variable">Variable Font</button>
+  </nav>
+  <div class="nav-title">Tools</div>
+  <nav class="nav">
+    <button data-view="about">How it works</button>
+  </nav>
+</aside>
+
+<main class="content">
+<section id="welcome">
+  <div class="hero">
+    <div><div class="eyebrow">100% client-side</div><h1>Professional Bangla font inspector.</h1><p>Inspect, preview, explore every glyph—including unencoded shaping glyphs—and edit metadata locally. No font upload to a server.</p></div>
+  </div>
+  <div class="dropzone" id="dropzone">
+    <div class="drop-icon">↥</div>
+    <h2>Drop a font here</h2>
+    <p>TTF, OTF, WOFF and WOFF2 can be inspected and previewed.</p>
+    <button class="btn primary" id="chooseBtn" type="button" aria-label="Choose a font file">Choose Font</button>
+    <input id="fileInput" aria-label="Font file" type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2" hidden>
+    <div class="file-note">Metadata editing/export is available for TTF and OTF. WOFF/WOFF2 remain read-only.</div>
+  </div>
+</section>
+
+<section class="view" id="overview">
+  <div class="hero"><div><div class="eyebrow">Font overview</div><h1 id="fontTitle">No font loaded</h1><p id="fontSub">Load a TTF, OTF, WOFF or WOFF2 to begin.</p></div><div><span class="badge" id="formatBadge">—</span></div></div>
+  <div class="grid cols4" id="stats"></div>
+  <div class="grid cols2" style="margin-top:14px">
+    <div class="card"><div class="card-head"><h3>Font identity</h3><span>name metadata</span></div><div class="card-body" id="identity"></div></div>
+    <div class="card"><div class="card-head"><h3>Font metrics</h3><span>outline & vertical metrics</span></div><div class="card-body" id="layoutSummary"></div></div>
+    <div class="card"><div class="card-head"><h3>File & character coverage</h3><span>local analysis</span></div><div class="card-body" id="coverageSummary"></div></div>
+    <div class="card"><div class="card-head"><h3>Bangla shaping preview</h3><span>browser shaping engine</span></div><div class="card-body">
+      <div class="bangla-sample" id="overviewBanglaSample">বাংলা ভাষা। ক্ষুদ্র জ্ঞানই শক্তি। শ্রদ্ধা, স্বাধীনতা, কর্মক্ষেত্র, প্রয়োজন, যুক্তবর্ণ, দৃষ্টান্ত।</div>
+      <div class="notice" style="margin-top:12px">যুক্তবর্ণ একাধিক Unicode character থেকে একটি বা একাধিক glyph-এ তৈরি হতে পারে। তাই Glyph Explorer-এ প্রতিটি glyph-এর outline দেখানো হয়, আর এই preview-তে browser-এর shaping engine দিয়ে আসল বাংলা rendering দেখা যায়।</div>
+    </div></div>
+  </div>
+</section>
+
+<section class="view" id="preview">
+  <div class="hero"><div><div class="eyebrow">Type tester</div><h1>Type & Preview</h1><p>Change text, size and weight live.</p></div></div>
+  <div class="card">
+    <div class="card-body">
+      <div class="preview-tools">
+        <button class="btn small" id="sizeDown" type="button" aria-label="Decrease preview size">−</button>
+        <input class="range" id="sizeRange" aria-label="Preview font size" type="range" min="12" max="180" value="54">
+        <button class="btn small" id="sizeUp" type="button" aria-label="Increase preview size">+</button>
+        <span class="badge" id="sizeLabel">54px</span>
+        <select id="weightSelect" aria-label="Preview font weight" style="width:130px"><option value="100">100</option><option value="200">200</option><option value="300">300</option><option value="400" selected>400</option><option value="500">500</option><option value="600">600</option><option value="700">700</option><option value="800">800</option><option value="900">900</option></select>
+        
+      </div>
+    </div>
+    <div class="preview-box"><div id="previewText" class="preview-text" contenteditable="true" spellcheck="false">বাংলা ভাষার যুক্তবর্ণ পরীক্ষা — বাংলা, ক্ষ, জ্ঞ, শ্র, ত্র, দ্ধ, ন্দ, ষ্ট, প্র, ক্র, গ্র, ব্র, স্ব, স্ত্র। Typography & font layout</div></div>
+    <div class="card-body"><div class="notice">Tip: Select text and type directly. Changes are previewed instantly in your browser.</div></div>
+  </div>
+</section>
+
+<section class="view" id="glyphs">
+  <div class="hero"><div><div class="eyebrow">Character map</div><h1>Glyph Explorer</h1><p>Browse glyphs clearly by character, Unicode name and GID. Click any glyph for full details.</p></div><input class="search" id="glyphSearch" aria-label="Search glyphs by character, Unicode name, GID or code point" placeholder="Search character / Unicode name..."></div>
+  <div class="card"><div class="card-body"><div id="glyphGrid" class="glyph-grid"></div><div id="glyphPagination" class="pagination" aria-label="Glyph pages"></div><div id="glyphEmpty" class="empty" style="display:none"><strong>No matching glyphs</strong>Try another search.</div></div></div>
+</section>
+
+<section class="view" id="metadata">
+  <div class="hero"><div><div class="eyebrow">Metadata editor</div><h1>Edit Font Metadata</h1><p>Existing metadata is loaded from the font. Save preserves the other font data instead of rebuilding the font from scratch.</p></div></div>
+  <div class="notice warn" id="editNotice">Load a TTF or OTF to edit and export metadata.</div>
+  <div class="card" style="margin-top:14px">
+    <div class="card-head"><h3>Name records</h3><span>Unicode name table</span></div>
+    <div class="card-body">
+      <div class="editor-grid">
+        <div class="field"><label>Font Family</label><input data-meta="family"></div>
+        <div class="field"><label>Subfamily / Style</label><input data-meta="subfamily"></div>
+        <div class="field"><label>Full Name</label><input data-meta="fullName"></div>
+        <div class="field"><label>PostScript Name</label><input data-meta="postScript"></div>
+        <div class="field"><label>Version</label><input data-meta="version"></div>
+        <div class="field"><label>Copyright</label><input data-meta="copyright"></div>
+        <div class="field"><label>Trademark</label><input data-meta="trademark"></div>
+        <div class="field"><label>Manufacturer</label><input data-meta="manufacturer"></div>
+        <div class="field"><label>Designer</label><input data-meta="designer"></div>
+        <div class="field"><label>Manufacturer URL</label><input data-meta="manufacturerURL"></div>
+        <div class="field"><label>Designer URL</label><input data-meta="designerURL"></div>
+        <div class="field"><label>License</label><input data-meta="license"></div>
+        <div class="field"><label>License URL</label><input data-meta="licenseURL"></div>
+        <div class="field"><label>Sample Text</label><input data-meta="sampleText"></div>
+        <div class="field"><label>Metadata language</label><select id="metaLang" aria-label="Metadata language"><option value="bn" selected>Bengali — Windows 0x0445</option><option value="en">English — Windows 0x0409</option></select></div>
+        <div class="field"><label>Vendor ID — 4 ASCII chars</label><input id="vendorId" aria-label="Vendor ID" maxlength="4" class="mono" placeholder="ABCD"></div>
+      </div>
+      <div style="display:flex;gap:9px;flex-wrap:wrap;margin-top:5px"><button class="btn success" id="saveMetaBtn" type="button" aria-label="Save font metadata">Save Metadata</button><button class="btn" id="reloadMetaBtn" type="button" aria-label="Reload original metadata">Reload Original</button></div>
+    </div>
+  </div>
+</section>
+
+<section class="view" id="variable">
+  <div class="hero"><div><div class="eyebrow">Variable fonts</div><h1>Variable Font Tester</h1><p>Live sliders are created from the <span class="mono">fvar</span> table when the font contains variable axes.</p></div></div>
+  <div class="card"><div class="card-body" id="axisBox"><div class="empty"><strong>No font loaded</strong>Load a font to inspect variable axes.</div></div></div>
+</section>
+
+<section class="view" id="about">
+  <div class="hero"><div><div class="eyebrow">Documentation</div><h1>How it works</h1><p>A practical, browser-only font inspection workflow.</p></div></div>
+  <div class="grid cols2">
+    <div class="card"><div class="card-head"><h3>Read & preview</h3></div><div class="card-body"><p class="muted">The app reads the font locally and uses the browser FontFace API for a real font preview. Your font is not sent to a server.</p></div></div>
+    <div class="card"><div class="card-head"><h3>Metadata export</h3></div><div class="card-body"><p class="muted">For TTF/OTF, the editor rewrites the name table and vendor ID while preserving the other SFNT tables and recalculating directory/checksum information.</p></div></div>
+  </div>
+</section>
+</main>
+</div>
+</div>
+<div id="toast" class="toast"></div>
+
+<script src="app.js" defer></script>
+</body>
+</html>
