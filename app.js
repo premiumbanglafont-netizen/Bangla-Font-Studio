@@ -399,85 +399,195 @@
     try{applyPreviewStyle()}catch(e){console.warn("Preview render:",e)}
   }
 
-  function makeNameTable(meta, lang){
+  // Build a metadata-safe name table by starting from the ORIGINAL name
+  // records.  Only the Windows Unicode records for the selected language and
+  // the Name IDs exposed by the editor are changed.  Every other name record
+  // (including Name IDs 3 and 10) is preserved.
+  function readRawNameRecords(buffer, sfnt){
+    const table=sfnt?.tables?.find(t=>t.tag==="name");
+    if(!table || table.length<6) return null;
+    const d=new DataView(buffer,table.offset,table.length);
+    const format=d.getUint16(0), count=d.getUint16(2), storageOffset=d.getUint16(4);
+    if(storageOffset>table.length || 6+count*12>table.length) return null;
+
     const records=[];
-    const languageID=lang==="en"?CONSTANTS.NAME_LANG_EN:CONSTANTS.NAME_LANG_BN;
+    for(let i=0;i<count;i++){
+      const p=6+i*12;
+      const platformID=d.getUint16(p), encodingID=d.getUint16(p+2), languageID=d.getUint16(p+4);
+      const nameID=d.getUint16(p+6), length=d.getUint16(p+8), offset=d.getUint16(p+10);
+      const start=storageOffset+offset, end=start+length;
+      if(end>table.length) continue;
+      records.push({platformID,encodingID,languageID,nameID,bytes:new Uint8Array(buffer,table.offset+start,length).slice()});
+    }
+    return {format,records};
+  }
+
+  function encodeUTF16BE(value){
+    const str=String(value??"");
+    const units=[];
+    for(let i=0;i<str.length;i++){
+      const c=str.charCodeAt(i);
+      units.push((c>>8)&255,c&255);
+    }
+    return new Uint8Array(units);
+  }
+
+  function makeNameTable(meta, lang, original){
+    const parsed=original || {format:0,records:[]};
+    const languageID=lang==="en" ? CONSTANTS.NAME_LANG_EN : CONSTANTS.NAME_LANG_BN;
+    const editedById=new Map();
     Object.entries(ids).forEach(([key,id])=>{
       let value=String(meta[key]??"");
-      if(!value) return;
       if(id===6) value=value.replace(/[^A-Za-z0-9_.-]/g,"-").slice(0,63);
-      records.push({nameID:id,value});
+      editedById.set(id,value);
     });
-    const enc=new TextEncoder();
-    const strBytes=[]; const recs=[];
-    let offset=0;
-    for(const r of records){
-      const bytes=new Uint8Array(r.value.length*2);
-      for(let i=0;i<r.value.length;i++){bytes[i*2]=r.value.charCodeAt(i)>>8;bytes[i*2+1]=r.value.charCodeAt(i)&255}
-      recs.push({nameID:r.nameID,length:bytes.length,offset});
-      strBytes.push(bytes); offset+=bytes.length;
+
+    const records=parsed.records.map(r=>({
+      platformID:r.platformID, encodingID:r.encodingID, languageID:r.languageID,
+      nameID:r.nameID, bytes:r.bytes.slice(), _edited:false
+    }));
+
+    // Update only the editor's metadata IDs in Windows Unicode records for
+    // the selected language. Other platforms/languages remain untouched.
+    for(const [nameID,value] of editedById){
+      const matches=records.filter(r=>
+        r.platformID===3 && (r.encodingID===1 || r.encodingID===10) &&
+        r.languageID===languageID && r.nameID===nameID
+      );
+      if(matches.length){
+        if(value){
+          const bytes=encodeUTF16BE(value);
+          matches.forEach(r=>{r.bytes=bytes.slice();r._edited=true});
+        }else{
+          for(let i=records.length-1;i>=0;i--){
+            const r=records[i];
+            if(r.platformID===3 && (r.encodingID===1 || r.encodingID===10) && r.languageID===languageID && r.nameID===nameID) records.splice(i,1);
+          }
+        }
+      }else if(value){
+        // The selected language may not exist in the original font. Add one
+        // Windows Unicode record without disturbing existing records.
+        records.push({platformID:3,encodingID:1,languageID,nameID,bytes:encodeUTF16BE(value),_edited:true});
+      }
     }
-    const header=6+recs.length*12, total=header+offset;
-    const out=new Uint8Array(total), d=new DataView(out.buffer);
-    d.setUint16(0,0); d.setUint16(2,recs.length); d.setUint16(4,header);
-    recs.forEach((r,i)=>{
-      const p=6+i*12; d.setUint16(p,3);d.setUint16(p+2,1);d.setUint16(p+4,languageID);d.setUint16(p+6,r.nameID);d.setUint16(p+8,r.length);d.setUint16(p+10,r.offset);
+
+    // Keep name-table version 0/1 where possible. For v1 we preserve the
+    // existing header's language-tag records by rebuilding only the name
+    // records/storage area; uncommon malformed v1 tables safely fall back to v0.
+    const format=(parsed.format===0 || parsed.format===1) ? parsed.format : 0;
+    const recordBytes=records.map(r=>r.bytes);
+    const recordCount=records.length;
+
+    if(format===1){
+      // Read and preserve v1 language-tag records and their storage bytes.
+      const table=state.sfnt?.tables?.find(t=>t.tag==="name");
+      const d=new DataView(state.buffer,table.offset,table.length);
+      const base=6+recordCount*12;
+      const oldCount=d.getUint16(6);
+      const oldTagBytes=oldCount*4;
+      const oldTagStart=10;
+      const oldStorageOffset=d.getUint16(4);
+      if(oldTagStart+oldTagBytes<=oldStorageOffset && oldStorageOffset<=table.length){
+        const tagRecords=new Uint8Array(state.buffer,table.offset+oldTagStart,oldTagBytes).slice();
+        const oldStorage=new Uint8Array(state.buffer,table.offset+oldStorageOffset,table.length-oldStorageOffset).slice();
+        const header=10+oldTagBytes;
+        let storageSize=0; for(const b of recordBytes) storageSize+=b.length;
+        const total=header+storageSize+oldStorage.length;
+        if(total<=0xFFFF){
+          const out=new Uint8Array(total), od=new DataView(out.buffer);
+          od.setUint16(0,1); od.setUint16(2,recordCount); od.setUint16(4,header+storageSize); od.setUint16(6,oldCount);
+          out.set(tagRecords,10);
+          let pos=header+storageSize; out.set(oldStorage,pos);
+          let strOff=0;
+          records.forEach((r,i)=>{
+            const p=10+oldTagBytes+i*12;
+            od.setUint16(p,r.platformID); od.setUint16(p+2,r.encodingID); od.setUint16(p+4,r.languageID);
+            od.setUint16(p+6,r.nameID); od.setUint16(p+8,r.bytes.length); od.setUint16(p+10,strOff); strOff+=r.bytes.length;
+          });
+          pos=header; for(const b of recordBytes){out.set(b,pos);pos+=b.length;}
+          return out;
+        }
+      }
+    }
+
+    let storageSize=0; for(const b of recordBytes) storageSize+=b.length;
+    const header=6+recordCount*12;
+    if(header+storageSize>0xFFFF) throw new Error("Font metadata is too large for the OpenType name table.");
+    const out=new Uint8Array(header+storageSize), d=new DataView(out.buffer);
+    d.setUint16(0,0); d.setUint16(2,recordCount); d.setUint16(4,header);
+    let strOff=0, pos=header;
+    records.forEach((r,i)=>{
+      const p=6+i*12;
+      d.setUint16(p,r.platformID); d.setUint16(p+2,r.encodingID); d.setUint16(p+4,r.languageID);
+      d.setUint16(p+6,r.nameID); d.setUint16(p+8,r.bytes.length); d.setUint16(p+10,strOff);
+      out.set(r.bytes,pos); pos+=r.bytes.length; strOff+=r.bytes.length;
     });
-    let pos=header; strBytes.forEach(b=>{out.set(b,pos);pos+=b.length});
     return out;
   }
 
   function buildEditedSFNT(){
     if(!state.sfnt || !["TTF","OTF"].includes(state.format)) throw new Error("Metadata export supports TTF and OTF only.");
     const d=new DataView(state.buffer);
-    const meta={}; $$("[data-meta]").forEach(i=>meta[i.dataset.meta]=i.value.trim());
-    const vendorEl=$("#vendorId"), langEl=$("#metaLang");
-    const vendor=(vendorEl?.value||"").trim();
+    const meta={}; $$('[data-meta]').forEach(i=>meta[i.dataset.meta]=i.value.trim());
+    const vendor=( $("#vendorId")?.value || "" ).trim();
     if(vendor && !/^[\x20-\x7E]{4}$/.test(vendor)) throw new Error("Vendor ID must be exactly 4 printable ASCII characters.");
-    const lang=langEl?.value||"bn";
-    const sourceTables=state.sfnt.tables.map(t=>({tag:t.tag,bytes:new Uint8Array(state.buffer,t.offset,t.length)}));
-    const nameBytes=makeNameTable(meta,lang);
-    const tables=sourceTables.map(t=>t.tag==="name"?{tag:t.tag,bytes:nameBytes}: {tag:t.tag,bytes:new Uint8Array(t.bytes)});
+    const lang=$("#metaLang")?.value||"bn";
+
+    const originalName=readRawNameRecords(state.buffer,state.sfnt);
+    if(!originalName) throw new Error("The font does not contain a readable name table.");
+    const nameBytes=makeNameTable(meta,lang,originalName);
+
+    // Preserve every source table byte-for-byte except the tables that the
+    // user explicitly edits. A signed DSIG cannot remain valid after any
+    // metadata change, so remove it rather than leaving a stale signature.
+    const tables=[];
+    for(const t of state.sfnt.tables){
+      if(t.tag==="DSIG") continue;
+      if(t.tag==="name") tables.push({tag:t.tag,bytes:nameBytes});
+      else tables.push({tag:t.tag,bytes:new Uint8Array(state.buffer,t.offset,t.length).slice()});
+    }
+
     if(vendor){
       const os=tables.find(t=>t.tag==="OS/2");
       if(os && os.bytes.length>=62) os.bytes.set(new TextEncoder().encode(vendor),58);
     }
-    // Directory + tables
+
+    // Repack the SFNT directory without touching the contents of GSUB/GPOS/
+    // GDEF/glyf/cmap/etc. Offsets may move, but table bytes remain identical.
     const n=tables.length, dirSize=12+n*16;
     let cursor=SFNTUtils.align4(dirSize);
     const entries=[];
     for(const t of tables){
-      const off=cursor, len=t.bytes.length;
-      const padded=SFNTUtils.align4(len);
-      entries.push({tag:t.tag,bytes:t.bytes,offset:off,length:len,checksum:0});
-      cursor+=padded;
+      entries.push({tag:t.tag,bytes:t.bytes,offset:cursor,length:t.bytes.length,checksum:0});
+      cursor+=SFNTUtils.align4(t.bytes.length);
     }
-    const out=new Uint8Array(cursor); const od=new DataView(out.buffer);
-    // scaler and search fields
-    const scaler=d.getUint32(0,false); od.setUint32(0,scaler,false);
-    od.setUint16(4,n); let maxPower=1, entrySelector=0; while(maxPower*2<=n){maxPower*=2;entrySelector++}
+
+    const out=new Uint8Array(cursor), od=new DataView(out.buffer);
+    const scaler=d.getUint32(0,false);
+    od.setUint32(0,scaler,false); od.setUint16(4,n);
+    let maxPower=1,entrySelector=0; while(maxPower*2<=n){maxPower*=2;entrySelector++;}
     od.setUint16(6,maxPower*16); od.setUint16(8,entrySelector); od.setUint16(10,n*16-maxPower*16);
+
     entries.sort((a,b)=>a.tag.localeCompare(b.tag));
-    // Offsets must follow sorted directory; repack.
     cursor=SFNTUtils.align4(dirSize);
-    for(const e of entries){e.offset=cursor;out.set(e.bytes,cursor);cursor+=SFNTUtils.align4(e.length)}
+    for(const e of entries){e.offset=cursor;out.set(e.bytes,cursor);cursor+=SFNTUtils.align4(e.length);}
+
     entries.forEach((e,i)=>{
-      const tmp=new Uint8Array(out.buffer,e.offset,SFNTUtils.align4(e.length));
-      const savedHead = e.tag==="head" && e.length>=12 ? tmp.slice(0,12) : null;
-      if(savedHead){new DataView(tmp.buffer,tmp.byteOffset,tmp.byteLength).setUint32(8,0,false)}
+      const padded=SFNTUtils.align4(e.length);
+      const tmp=new Uint8Array(padded); tmp.set(e.bytes);
+      if(e.tag==="head" && e.length>=12) new DataView(tmp.buffer).setUint32(8,0,false);
       e.checksum=SFNTUtils.calcChecksum(tmp);
-      if(savedHead) tmp.set(savedHead);
       const p=12+i*16;
       for(let k=0;k<4;k++) od.setUint8(p+k,e.tag.charCodeAt(k));
       od.setUint32(p+4,e.checksum>>>0); od.setUint32(p+8,e.offset>>>0); od.setUint32(p+12,e.length>>>0);
     });
+
     const head=entries.find(e=>e.tag==="head");
     if(head && head.length>=12){
       const hd=new DataView(out.buffer,head.offset,head.length);
       hd.setUint32(8,0,false);
       const sum=SFNTUtils.calcChecksum(out);
-      const adj=(CONSTANTS.HEAD_CHECKSUM_MAGIC - sum)>>>0;
-      hd.setUint32(8,adj,false);
+      hd.setUint32(8,(CONSTANTS.HEAD_CHECKSUM_MAGIC-sum)>>>0,false);
     }
     return out.buffer;
   }
